@@ -1,0 +1,14 @@
+services:
+  - type: web
+    name: bcr
+    env: node
+    plan: free
+    buildCommand: npm install
+    startCommand: npm start
+    envVars:
+      - key: NODE_VERSION
+        value: 20.11.0
+      - key: BCR_USERNAME
+        sync: false
+      - key: BCR_PASSWORD
+        sync: false
