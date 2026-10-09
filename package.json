@@ -1,0 +1,16 @@
+{
+  "name": "baccarat-api",
+  "version": "1.0.0",
+  "description": "Baccarat API Server from aibcr.me",
+  "main": "bcr.js",
+  "scripts": {
+    "start": "node bcr.js"
+  },
+  "dependencies": {
+    "axios": "^1.6.0",
+    "express": "^4.18.2"
+  },
+  "engines": {
+    "node": ">=20.0.0"
+  }
+}
