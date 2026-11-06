@@ -22,11 +22,11 @@ let baccaratData = [];
 let lastUpdate = null;
 
 // ======================
-// QUẢN LÝ THỐNG KÊ (STATS)
+// QUẢN LÝ THỐNG KÊ (STATS) - PHỤC HỒI CHUẨN BẢN CŨ
 // ======================
 let stats = {};
 let pendingPredictions = {}; // { "table_1": { pred: "PLAYER", round: 123 } }
-let lastResultsMap = {};     // { "table_1": "BBPBB..." } - Lưu chuỗi kết quả cũ để check ván mới
+let lastRounds = {};         // { "table_1": 123 } - Lưu round trước đó để check ván mới
 
 function loadStats() {
     if (fs.existsSync(STATS_FILE)) {
@@ -473,19 +473,16 @@ async function fetchBaccaratData() {
                 round: item.round || ''
             }));
 
-            // === KIỂM TRA VÁN MỚI ĐỂ CHẤM ĐIỂM CHÍNH XÁC ===
+            // === KIỂM TRA VÁN MỚI ĐỂ CHẤM ĐIỂM (CƠ CHẾ BẢN CŨ) ===
             for (const table of newData) {
                 const tableName = table.table;
-                const currentResultString = table.result || '';
-                const lastSavedResult = lastResultsMap[tableName];
+                const currentRound = table.round || table.result.length;
+                const lastRound = lastRounds[tableName];
 
-                // Nếu có kết quả cũ và chiều dài chuỗi tăng lên (có ván mới nổ)
-                if (lastSavedResult !== undefined && currentResultString.length > lastSavedResult.length) {
+                if (lastRound !== undefined && currentRound > lastRound) {
                     const pending = pendingPredictions[tableName];
                     if (pending) {
-                        const cleanResults = currentResultString.replace(/T/g, '');
-                        const actualResult = cleanResults.slice(-1); // Lấy ký tự cuối (P hoặc B)
-                        
+                        const actualResult = table.result.slice(-1); // Lấy kết quả mới nhất (P hoặc B)
                         const isWin = (pending.pred === 'PLAYER' && actualResult === 'P') || 
                                       (pending.pred === 'BANKER' && actualResult === 'B');
                         
@@ -493,20 +490,19 @@ async function fetchBaccaratData() {
                         tStats.total++;
                         if (isWin) tStats.win++;
                         else tStats.loss++;
-                        tStats.rate = ((tStats.win / tStats.total) * 100).toFixed(1);
+                        tStats.rate = (tStats.win / tStats.total * 100).toFixed(1);
                         tStats.history.push(isWin ? 'W' : 'L');
-                        
                         if (tStats.history.length > 50) tStats.history.shift();
                         saveStats(); // Lưu trực tiếp vào stats.json
                     }
                 }
-                lastResultsMap[tableName] = currentResultString;
+                lastRounds[tableName] = currentRound;
             }
 
             baccaratData = newData;
             lastUpdate = new Date().toISOString();
 
-            // Huấn luyện AI & Tạo dự đoán mới cho ván kế tiếp
+            // Huấn luyện AI & Cập nhật dự đoán cho ván tới
             for (const item of baccaratData) {
                 learn(item.result, item.table);
                 const analysis = analyzePattern(item.result, item.table);
@@ -608,7 +604,7 @@ app.get('/api/predict/:table', (req, res) => {
 // ======================
 async function start() {
     loadStats();
-    console.log('--- BACCARAT API SERVER (AI ENGINE + STATS FIXED) ---');
+    console.log('--- BACCARAT API SERVER (AI ENGINE + STATS RESTORED) ---');
     console.log('Đang đăng nhập...');
     if (!await login()) { console.error('Login thất bại!'); process.exit(1); }
     await goToLobby();
