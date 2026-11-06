@@ -26,16 +26,22 @@ let lastUpdate = null;
 // ======================
 let stats = {};
 let pendingPredictions = {}; // { "table_1": { pred: "PLAYER", round: 123 } }
-let lastRounds = {}; // { "table_1": 123 } - Lưu round trước đó để check ván mới
+let lastResultsMap = {};     // { "table_1": "BBPBB..." } - Lưu chuỗi kết quả cũ để check ván mới
 
 function loadStats() {
     if (fs.existsSync(STATS_FILE)) {
-        try { stats = JSON.parse(fs.readFileSync(STATS_FILE, 'utf8')); } catch (e) {}
+        try { 
+            stats = JSON.parse(fs.readFileSync(STATS_FILE, 'utf8')); 
+        } catch (e) {
+            stats = {};
+        }
     }
 }
 
 function saveStats() {
-    try { fs.writeFileSync(STATS_FILE, JSON.stringify(stats, null, 2)); } catch (e) {}
+    try { 
+        fs.writeFileSync(STATS_FILE, JSON.stringify(stats, null, 2)); 
+    } catch (e) {}
 }
 
 function getTableStats(tableName) {
@@ -84,7 +90,7 @@ function getCsrfToken(html) {
 }
 
 // ======================
-// AI MEMORY & THUẬT TOÁN MỚI (BRIDGE, MARKOV, TREND, BAYESIAN)
+// AI MEMORY & THUẬT TOÁN (BRIDGE, MARKOV, TREND, BAYESIAN)
 // ======================
 let AI_MEMORY = {
     bridge_history: {},
@@ -407,7 +413,6 @@ function learn(raw, ban) {
     else AI_MEMORY.bayesian.conditional[lastBefore].next_P++;
 }
 
-// Hàm Wrapper tương thích với hệ thống gọi cũ
 function analyzePattern(resultArray, tableName = null) {
     let hist = "";
     if (typeof resultArray === 'string') {
@@ -468,16 +473,19 @@ async function fetchBaccaratData() {
                 round: item.round || ''
             }));
 
-            // === KIỂM TRA VÁN MỚI ĐỂ CHẤM ĐIỂM ===
+            // === KIỂM TRA VÁN MỚI ĐỂ CHẤM ĐIỂM CHÍNH XÁC ===
             for (const table of newData) {
                 const tableName = table.table;
-                const currentRound = table.round || table.result.length;
-                const lastRound = lastRounds[tableName];
+                const currentResultString = table.result || '';
+                const lastSavedResult = lastResultsMap[tableName];
 
-                if (lastRound !== undefined && currentRound > lastRound) {
+                // Nếu có kết quả cũ và chiều dài chuỗi tăng lên (có ván mới nổ)
+                if (lastSavedResult !== undefined && currentResultString.length > lastSavedResult.length) {
                     const pending = pendingPredictions[tableName];
                     if (pending) {
-                        const actualResult = table.result.slice(-1);
+                        const cleanResults = currentResultString.replace(/T/g, '');
+                        const actualResult = cleanResults.slice(-1); // Lấy ký tự cuối (P hoặc B)
+                        
                         const isWin = (pending.pred === 'PLAYER' && actualResult === 'P') || 
                                       (pending.pred === 'BANKER' && actualResult === 'B');
                         
@@ -485,19 +493,20 @@ async function fetchBaccaratData() {
                         tStats.total++;
                         if (isWin) tStats.win++;
                         else tStats.loss++;
-                        tStats.rate = (tStats.win / tStats.total * 100).toFixed(1);
+                        tStats.rate = ((tStats.win / tStats.total) * 100).toFixed(1);
                         tStats.history.push(isWin ? 'W' : 'L');
+                        
                         if (tStats.history.length > 50) tStats.history.shift();
-                        saveStats();
+                        saveStats(); // Lưu trực tiếp vào stats.json
                     }
                 }
-                lastRounds[tableName] = currentRound;
+                lastResultsMap[tableName] = currentResultString;
             }
 
             baccaratData = newData;
             lastUpdate = new Date().toISOString();
 
-            // Huấn luyện mô hình AI & Cập nhật dự đoán cho ván tới
+            // Huấn luyện AI & Tạo dự đoán mới cho ván kế tiếp
             for (const item of baccaratData) {
                 learn(item.result, item.table);
                 const analysis = analyzePattern(item.result, item.table);
@@ -599,7 +608,7 @@ app.get('/api/predict/:table', (req, res) => {
 // ======================
 async function start() {
     loadStats();
-    console.log('--- BACCARAT API SERVER (AI ENGINE: MARKOV, BAYESIAN, BRIDGE) ---');
+    console.log('--- BACCARAT API SERVER (AI ENGINE + STATS FIXED) ---');
     console.log('Đang đăng nhập...');
     if (!await login()) { console.error('Login thất bại!'); process.exit(1); }
     await goToLobby();
