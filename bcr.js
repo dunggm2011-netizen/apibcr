@@ -22,26 +22,20 @@ let baccaratData = [];
 let lastUpdate = null;
 
 // ======================
-// QUẢN LÝ THỐNG KÊ (STATS) - PHỤC HỒI CHUẨN BẢN CŨ
+// QUẢN LÝ THỐNG KÊ (STATS)
 // ======================
 let stats = {};
-let pendingPredictions = {}; // { "table_1": { pred: "PLAYER", round: 123 } }
-let lastRounds = {};         // { "table_1": 123 } - Lưu round trước đó để check ván mới
+let pendingPredictions = {}; // { "C17": { pred: "BANKER", round: 68 } }
+let lastResultsMap = {};     // { "C17": "BBPBB..." } - Lưu chuỗi kết quả để check ván mới chuẩn xác
 
 function loadStats() {
     if (fs.existsSync(STATS_FILE)) {
-        try { 
-            stats = JSON.parse(fs.readFileSync(STATS_FILE, 'utf8')); 
-        } catch (e) {
-            stats = {};
-        }
+        try { stats = JSON.parse(fs.readFileSync(STATS_FILE, 'utf8')); } catch (e) { stats = {}; }
     }
 }
 
 function saveStats() {
-    try { 
-        fs.writeFileSync(STATS_FILE, JSON.stringify(stats, null, 2)); 
-    } catch (e) {}
+    try { fs.writeFileSync(STATS_FILE, JSON.stringify(stats, null, 2)); } catch (e) {}
 }
 
 function getTableStats(tableName) {
@@ -90,7 +84,7 @@ function getCsrfToken(html) {
 }
 
 // ======================
-// AI MEMORY & THUẬT TOÁN (BRIDGE, MARKOV, TREND, BAYESIAN)
+// AI MEMORY & THUẬT TOÁN ĐẦY ĐỦ
 // ======================
 let AI_MEMORY = {
     bridge_history: {},
@@ -127,7 +121,7 @@ const DEFAULT_TRUST = {
 const MAX_BRIDGE_POINTS = 35;
 
 function convert(v) {
-    return v === "B" ? "Banker" : "Player";
+    return v === "B" ? "BANKER" : "PLAYER";
 }
 function opposite(v) { return v === "B" ? "P" : "B"; }
 function clamp(n, min, max) { return Math.max(min, Math.min(max, n)); }
@@ -270,7 +264,6 @@ function detectBridge(s) {
 
 function markovBackoff(s) {
     if (s.length < 2) return { B: 0, P: 0 };
-
     const orders = [5, 4, 3, 2];
     for (const order of orders) {
         if (s.length < order) continue;
@@ -325,8 +318,8 @@ function predict(raw, ban) {
     if (s.length < 4) {
         AI_MEMORY.stats.skip++;
         return {
-            prediction: 'CHỜ',
-            confidence: 0,
+            prediction: 'PLAYER',
+            confidence: 50,
             pattern: 'Chuỗi quá ngắn (<4 ván)',
             explanation: 'Chuỗi quá ngắn (<4 ván)'
         };
@@ -372,7 +365,7 @@ function predict(raw, ban) {
     const reasons = [];
     if (markov.B > 0 || markov.P > 0) reasons.push(`✔ Markov (B:${markov.B}% P:${markov.P}%)`);
     if (bridge.name !== "NONE") {
-        reasons.push(`✔ ${bridge.name} (+${bridge.weight}) [trust:${bridge.trust.toFixed(2)} conf:${bridge.confidence.toFixed(2)}]`);
+        reasons.push(`✔ ${bridge.name} (+${bridge.weight})`);
     }
     if (trend.side !== "NONE") reasons.push(`✔ Xu hướng ${trend.side} (+${trend.weight})`);
     if (bayes.B > 0 || bayes.P > 0) reasons.push(`✔ Bayesian (B:${bayes.B}% P:${bayes.P}%)`);
@@ -382,7 +375,7 @@ function predict(raw, ban) {
     return {
         prediction: convert(predictSide),
         confidence: clamp(confidence, 50, 99),
-        pattern: reasons[0] || "Tổng hợp",
+        pattern: bridge.name !== "NONE" ? bridge.name : "Score Fusion Engine",
         explanation: reasons.join(" | ")
     };
 }
@@ -473,16 +466,18 @@ async function fetchBaccaratData() {
                 round: item.round || ''
             }));
 
-            // === KIỂM TRA VÁN MỚI ĐỂ CHẤM ĐIỂM (CƠ CHẾ BẢN CŨ) ===
+            // === KIỂM TRA VÁN MỚI ĐỂ CHẤM ĐIỂM (FIX THỐNG KÊ) ===
             for (const table of newData) {
                 const tableName = table.table;
-                const currentRound = table.round || table.result.length;
-                const lastRound = lastRounds[tableName];
+                const currentResultString = table.result || '';
+                const lastSavedResult = lastResultsMap[tableName];
 
-                if (lastRound !== undefined && currentRound > lastRound) {
+                if (lastSavedResult !== undefined && currentResultString.length > lastSavedResult.length) {
                     const pending = pendingPredictions[tableName];
                     if (pending) {
-                        const actualResult = table.result.slice(-1); // Lấy kết quả mới nhất (P hoặc B)
+                        const cleanResults = currentResultString.replace(/T/g, '');
+                        const actualResult = cleanResults.slice(-1); // 'P' hoặc 'B'
+                        
                         const isWin = (pending.pred === 'PLAYER' && actualResult === 'P') || 
                                       (pending.pred === 'BANKER' && actualResult === 'B');
                         
@@ -490,13 +485,14 @@ async function fetchBaccaratData() {
                         tStats.total++;
                         if (isWin) tStats.win++;
                         else tStats.loss++;
-                        tStats.rate = (tStats.win / tStats.total * 100).toFixed(1);
+                        tStats.rate = ((tStats.win / tStats.total) * 100).toFixed(1);
                         tStats.history.push(isWin ? 'W' : 'L');
+                        
                         if (tStats.history.length > 50) tStats.history.shift();
                         saveStats(); // Lưu trực tiếp vào stats.json
                     }
                 }
-                lastRounds[tableName] = currentRound;
+                lastResultsMap[tableName] = currentResultString;
             }
 
             baccaratData = newData;
@@ -540,6 +536,7 @@ app.get('/api/latest', (req, res) => {
     res.json({ success: true, data: latest.slice(0, 10), lastUpdate });
 });
 
+// Endpoint Dự đoán tổng hợp (Kèm Thống kê)
 app.get('/api/bcrbytduy', (req, res) => {
     const predictions = [];
     for (const item of baccaratData) {
@@ -560,6 +557,7 @@ app.get('/api/bcrbytduy', (req, res) => {
     res.json({ success: true, time: new Date().toISOString(), predictions });
 });
 
+// Endpoint Thống kê TẤT CẢ các bàn
 app.get('/api/stats', (req, res) => {
     let totalWin = 0, totalLoss = 0;
     for (const t in stats) {
@@ -578,6 +576,7 @@ app.get('/api/stats', (req, res) => {
     });
 });
 
+// Endpoint Thống kê 1 bàn cụ thể
 app.get('/api/stats/:table', (req, res) => {
     const tableName = req.params.table;
     const tStats = getTableStats(tableName);
@@ -591,6 +590,7 @@ app.get('/api/stats/:table', (req, res) => {
     });
 });
 
+// Endpoint Dự đoán 1 bàn
 app.get('/api/predict/:table', (req, res) => {
     const found = baccaratData.find(item => item.table === req.params.table);
     if (!found) return res.json({ success: false, message: 'Không tìm thấy bàn' });
@@ -604,7 +604,7 @@ app.get('/api/predict/:table', (req, res) => {
 // ======================
 async function start() {
     loadStats();
-    console.log('--- BACCARAT API SERVER (AI ENGINE + STATS RESTORED) ---');
+    console.log('--- BACCARAT API SERVER (FULL AI ENGINE + FIXED STATS) ---');
     console.log('Đang đăng nhập...');
     if (!await login()) { console.error('Login thất bại!'); process.exit(1); }
     await goToLobby();
@@ -612,7 +612,7 @@ async function start() {
     await fetchBaccaratData();
     console.log(`Đã lấy ${baccaratData.length} bàn`);
 
-    setInterval(fetchBaccaratData, 3000);
+    setInterval(fetchBaccaratData, 3000); // Tự động update mỗi 3s
 
     const PORT = process.env.PORT || 5000;
     app.listen(PORT, '0.0.0.0', () => {
